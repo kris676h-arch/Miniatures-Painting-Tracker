@@ -115,16 +115,21 @@ export default function FactionPage() {
           const bd = b.miniatures.filter(m => m.status === 'done').length
           const bpct = bt > 0 ? Math.round(bd / bt * 100) : 0
           return (
-            <div key={b.id} style={{ borderBottom:'1px solid var(--border)', padding:'14px 20px', display:'flex', alignItems:'center', gap:'12px', cursor:'pointer', transition:'background 0.15s' }}
+            <div
+              key={b.id}
+              onClick={() => navigate(`/faction/${factionId}/box/${b.id}`)}
+              style={{ borderBottom:'1px solid var(--border)', padding:'14px 20px', display:'flex', alignItems:'center', gap:'12px', cursor:'pointer', transition:'background 0.15s' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--bg3)'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
             >
-              <div style={{ flex:1 }} onClick={() => navigate(`/faction/${factionId}/box/${b.id}`)}>
+              <div style={{ flex:1 }}>
                 <div style={{ fontWeight:600, color:'var(--text)', fontSize:'0.95rem' }}>{b.name}</div>
                 <div style={{ fontSize:'0.78rem', color:'var(--text-dim)', marginTop:'2px' }}>{bd}/{bt} malet{b.description ? ' · ' + b.description : ''}</div>
               </div>
               <ProgressBar pct={bpct} />
-              <button onClick={e => deleteBox(b.id, e)} style={{ background:'none', border:'none', color:'var(--text-dim)', cursor:'pointer', fontSize:'1rem', padding:'2px 6px', flexShrink:0, transition:'color 0.15s' }}
+              <button
+                onClick={e => deleteBox(b.id, e)}
+                style={{ background:'none', border:'none', color:'var(--text-dim)', cursor:'pointer', fontSize:'1rem', padding:'2px 6px', flexShrink:0, transition:'color 0.15s' }}
                 onMouseEnter={e => e.target.style.color = 'var(--red-bright)'}
                 onMouseLeave={e => e.target.style.color = 'var(--text-dim)'}
               >🗑</button>
