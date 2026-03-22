@@ -3,17 +3,17 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { Modal, FormGroup, Btn, BtnRow } from './ui.jsx'
 
-export default function Layout({ children }) {
+export default function Layout({ children, session }) {
   const navigate = useNavigate()
   const location = useLocation()
   const [factions, setFactions] = useState([])
   const [addOpen, setAddOpen] = useState(false)
   const [form, setForm] = useState({ name: '', icon: '⚔', color: '#c43030' })
   const [saving, setSaving] = useState(false)
+  const userId = session?.user?.id
 
   useEffect(() => {
     fetchFactions()
-    // realtime subscription
     const channel = supabase.channel('factions-nav')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'factions' }, fetchFactions)
       .subscribe()
@@ -28,7 +28,7 @@ export default function Layout({ children }) {
   async function addFaction() {
     if (!form.name.trim()) return
     setSaving(true)
-    await supabase.from('factions').insert({ name: form.name.trim(), icon: form.icon || '⚔', color: form.color || '#888899' })
+    await supabase.from('factions').insert({ name: form.name.trim(), icon: form.icon || '⚔', color: form.color || '#888899', user_id: userId })
     setSaving(false)
     setAddOpen(false)
     setForm({ name: '', icon: '⚔', color: '#c43030' })
@@ -59,6 +59,9 @@ export default function Layout({ children }) {
         <p style={{ color: 'var(--text-dim)', fontStyle: 'italic', marginTop: '4px', fontSize: '0.9rem' }}>
           Din hær. Din fremgang. Din ære.
         </p>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: '4px' }}>
+          {session?.user?.email}
+        </p>
       </header>
 
       <nav style={{
@@ -75,6 +78,7 @@ export default function Layout({ children }) {
           >{f.icon} {f.name}</NavBtn>
         ))}
         <NavBtn onClick={() => setAddOpen(true)}>＋ Fraktion</NavBtn>
+        <NavBtn onClick={() => supabase.auth.signOut()}>Log ud</NavBtn>
       </nav>
 
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px 16px 80px' }}>
