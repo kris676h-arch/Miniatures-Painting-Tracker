@@ -1,178 +1,296 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
-import { DonutChart, ProgressBar, Spinner, EmptyState, SectionHeader, Modal, FormGroup, Btn, BtnRow } from '../components/ui.jsx'
+import { Spinner, EmptyState, SectionHeader, Modal, FormGroup, Btn, BtnRow, StatusBadge, StatusPicker } from '../components/ui.jsx'
 
-export default function FactionPage() {
-  const { factionId } = useParams()
+export default function BoxPage() {
+  const { factionId, boxId } = useParams()
   const navigate = useNavigate()
   const [faction, setFaction] = useState(null)
-  const [boxes, setBoxes] = useState([])
+  const [box, setBox] = useState(null)
+  const [minis, setMinis] = useState([])
   const [loading, setLoading] = useState(true)
-  const [addBoxOpen, setAddBoxOpen] = useState(false)
-  const [editFactionOpen, setEditFactionOpen] = useState(false)
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const [boxForm, setBoxForm] = useState({ name: '', description: '' })
-  const [factionForm, setFactionForm] = useState({ name: '', icon: '', color: '' })
-  const [saving, setSaving] = useState(false)
 
-  useEffect(() => { fetchData() }, [factionId])
+  const [addOpen, setAddOpen] = useState(false)
+  const [addForm, setAddForm] = useState({ name: '', unit_type: '', status: 'unpainted', count: 1 })
+  const [addSaving, setAddSaving] = useState(false)
+
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [selectedMini, setSelectedMini] = useState(null)
+  const [editForm, setEditForm] = useState({ name: '', unit_type: '', status: 'unpainted', notes: '' })
+  const [editSaving, setEditSaving] = useState(false)
+  const [imgUploading, setImgUploading] = useState(false)
+  const imgInputRef = useRef(null)
+
+  const [deleteBoxOpen, setDeleteBoxOpen] = useState(false)
+
+  useEffect(() => { fetchData() }, [boxId])
 
   async function fetchData() {
     setLoading(true)
-    const [{ data: f }, { data: b }] = await Promise.all([
-      supabase.from('factions').select('*').eq('id', factionId).single(),
-      supabase.from('boxes').select('id, name, description, miniatures(id, status)').eq('faction_id', factionId).order('sort_order,created_at'),
+    const [{ data: f }, { data: b }, { data: m }] = await Promise.all([
+      supabase.from('factions').select('id,name,icon,color').eq('id', factionId).single(),
+      supabase.from('boxes').select('*').eq('id', boxId).single(),
+      supabase.from('miniatures').select('*').eq('box_id', boxId).order('created_at'),
     ])
-    if (f) { setFaction(f); setFactionForm({ name: f.name, icon: f.icon, color: f.color }) }
-    setBoxes(b || [])
+    setFaction(f)
+    setBox(b)
+    setMinis(m || [])
     setLoading(false)
   }
 
-  async function addBox() {
-    if (!boxForm.name.trim()) return
-    setSaving(true)
+  async function addMini() {
+    if (!addForm.name.trim()) return
+    setAddSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('boxes').insert({ faction_id: factionId, name: boxForm.name.trim(), description: boxForm.description.trim(), user_id: user.id })
-    setSaving(false)
-    setAddBoxOpen(false)
-    setBoxForm({ name: '', description: '' })
+    const count = Math.max(1, Math.min(100, parseInt(addForm.count) || 1))
+    const rows = Array.from({ length: count }, (_, i) => ({
+      box_id: boxId,
+      name: count === 1 ? addForm.name.trim() : `${addForm.name.trim()} #${i + 1}`,
+      unit_type: addForm.unit_type.trim(),
+      status: addForm.status,
+      user_id: user.id,
+    }))
+    await supabase.from('miniatures').insert(rows)
+    setAddSaving(false)
+    setAddOpen(false)
+    setAddForm({ name: '', unit_type: '', status: 'unpainted', count: 1 })
     fetchData()
   }
 
-  async function deleteBox(boxId, e) {
-    e.stopPropagation()
-    if (!confirm('Slet denne boks og alle dens figurer?')) return
+  function openDetail(mini) {
+    setSelectedMini(mini)
+    setEditForm({ name: mini.name, unit_type: mini.unit_type || '', status: mini.status, notes: mini.notes || '' })
+    setDetailOpen(true)
+  }
+
+  async function saveMini() {
+    if (!selectedMini) return
+    setEditSaving(true)
+    await supabase.from('miniatures').update({
+      name: editForm.name.trim() || selectedMini.name,
+      unit_type: editForm.unit_type.trim(),
+      status: editForm.status,
+      notes: editForm.notes,
+    }).eq('id', selectedMini.id)
+    setEditSaving(false)
+    setDetailOpen(false)
+    fetchData()
+  }
+
+  async function deleteMini() {
+    if (!selectedMini) return
+    if (!confirm(`Slet "${selectedMini.name}"?`)) return
+    if (selectedMini.image_url) {
+      const path = selectedMini.image_url.split('/miniature-images/')[1]
+      if (path) await supabase.storage.from('miniature-images').remove([path])
+    }
+    await supabase.from('miniatures').delete().eq('id', selectedMini.id)
+    setDetailOpen(false)
+    fetchData()
+  }
+
+  async function handleImgUpload(e) {
+    const file = e.target.files[0]
+    if (!file || !selectedMini) return
+    setImgUploading(true)
+    const ext = file.name.split('.').pop()
+    const path = `${selectedMini.id}-${Date.now()}.${ext}`
+    if (selectedMini.image_url) {
+      const oldPath = selectedMini.image_url.split('/miniature-images/')[1]
+      if (oldPath) await supabase.storage.from('miniature-images').remove([oldPath])
+    }
+    const { error } = await supabase.storage.from('miniature-images').upload(path, file, { upsert: true })
+    if (!error) {
+      const { data: { publicUrl } } = supabase.storage.from('miniature-images').getPublicUrl(path)
+      await supabase.from('miniatures').update({ image_url: publicUrl }).eq('id', selectedMini.id)
+      setSelectedMini(m => ({ ...m, image_url: publicUrl }))
+      fetchData()
+    }
+    setImgUploading(false)
+    e.target.value = ''
+  }
+
+  async function deleteBox() {
+    for (const m of minis) {
+      if (m.image_url) {
+        const path = m.image_url.split('/miniature-images/')[1]
+        if (path) await supabase.storage.from('miniature-images').remove([path])
+      }
+    }
     await supabase.from('boxes').delete().eq('id', boxId)
-    fetchData()
-  }
-
-  async function saveFaction() {
-    setSaving(true)
-    await supabase.from('factions').update({ name: factionForm.name, icon: factionForm.icon, color: factionForm.color }).eq('id', factionId)
-    setSaving(false)
-    setEditFactionOpen(false)
-    fetchData()
-  }
-
-  async function deleteFaction() {
-    await supabase.from('factions').delete().eq('id', factionId)
-    navigate('/')
+    navigate(`/faction/${factionId}`)
   }
 
   if (loading) return <Spinner />
-  if (!faction) return <div style={{ padding: '40px', color: 'var(--text-dim)' }}>Fraktion ikke fundet.</div>
+  if (!box) return <div style={{ padding:'40px', color:'var(--text-dim)' }}>Boks ikke fundet.</div>
 
-  const allMinis = boxes.flatMap(b => b.miniatures)
-  const done = allMinis.filter(m => m.status === 'done').length
-  const wip = allMinis.filter(m => m.status === 'wip').length
-  const unpainted = allMinis.filter(m => m.status === 'unpainted').length
-  const total = allMinis.length
-  const pct = total > 0 ? Math.round(done / total * 100) : 0
+  const done = minis.filter(m => m.status === 'done').length
+  const wip = minis.filter(m => m.status === 'wip').length
+  const unpainted = minis.filter(m => m.status === 'unpainted').length
 
   return (
-    <div style={{ animation: 'fadeIn 0.3s ease' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'24px', fontSize:'0.82rem', color:'var(--text-dim)' }}>
+    <div style={{ animation:'fadeIn 0.3s ease' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'24px', fontSize:'0.82rem', color:'var(--text-dim)', flexWrap:'wrap' }}>
         <span onClick={() => navigate('/')} style={{ cursor:'pointer' }} onMouseEnter={e=>e.target.style.color='var(--gold2)'} onMouseLeave={e=>e.target.style.color='var(--text-dim)'}>Oversigt</span>
         <span style={{ opacity:0.4 }}>›</span>
-        <span style={{ color:'var(--text)' }}>{faction.icon} {faction.name}</span>
+        <span onClick={() => navigate(`/faction/${factionId}`)} style={{ cursor:'pointer' }} onMouseEnter={e=>e.target.style.color='var(--gold2)'} onMouseLeave={e=>e.target.style.color='var(--text-dim)'}>{faction?.icon} {faction?.name}</span>
+        <span style={{ opacity:0.4 }}>›</span>
+        <span style={{ color:'var(--text)' }}>{box.name}</span>
       </div>
 
-      <div style={{ display:'flex', alignItems:'flex-start', gap:'24px', flexWrap:'wrap', marginBottom:'24px', paddingBottom:'24px', borderBottom:'1px solid var(--border)' }}>
-        <div style={{ fontSize:'3.5rem', lineHeight:1 }}>{faction.icon}</div>
+      <div style={{ display:'flex', alignItems:'flex-start', gap:'20px', flexWrap:'wrap', marginBottom:'24px', paddingBottom:'24px', borderBottom:'1px solid var(--border)' }}>
         <div style={{ flex:1, minWidth:'200px' }}>
-          <div style={{ fontFamily:"'Cinzel',serif", fontSize:'1.8rem', color:'var(--text-bright)', marginBottom:'4px' }}>{faction.name}</div>
-          <div style={{ color:'var(--text-dim)', fontStyle:'italic' }}>{boxes.length} bokse · {total} figurer</div>
-          <div style={{ display:'flex', gap:'8px', marginTop:'12px', flexWrap:'wrap' }}>
-            <Btn variant="ghost" style={{ fontSize:'0.68rem', padding:'6px 14px' }} onClick={() => setEditFactionOpen(true)}>✏ Redigér</Btn>
-            <Btn variant="danger" style={{ fontSize:'0.68rem', padding:'6px 14px' }} onClick={() => setDeleteConfirmOpen(true)}>🗑 Slet fraktion</Btn>
+          <div style={{ fontFamily:"'Cinzel',serif", fontSize:'1.6rem', color:'var(--text-bright)', marginBottom:'4px' }}>{box.name}</div>
+          <div style={{ color:'var(--text-dim)', fontStyle:'italic' }}>{box.description || ''} · {minis.length} figurer</div>
+          <div style={{ marginTop:'10px' }}>
+            <Btn variant="danger" style={{ fontSize:'0.68rem', padding:'6px 14px' }} onClick={() => setDeleteBoxOpen(true)}>🗑 Slet boks</Btn>
           </div>
         </div>
-        <DonutChart done={done} wip={wip} unpainted={unpainted} size={120} centerText={`${pct}%`} />
       </div>
 
       <div style={{ display:'flex', gap:'16px', flexWrap:'wrap', marginBottom:'28px' }}>
         {[
-          { num: done, label: 'Færdig', color: '#4ac466' },
-          { num: wip, label: 'I gang', color: '#e8b84b' },
-          { num: unpainted, label: 'Umalet', color: 'var(--text)' },
-          { num: total, label: 'Total', color: faction.color },
+          { num: done, label: 'Færdig', color:'#4ac466' },
+          { num: wip, label: 'I gang', color:'#e8b84b' },
+          { num: unpainted, label: 'Umalet', color:'var(--text)' },
         ].map(s => (
           <div key={s.label} style={{ background:'var(--bg2)', border:'1px solid var(--border)', padding:'14px 20px', textAlign:'center', minWidth:'90px' }}>
-            <div style={{ fontFamily:"'Cinzel',serif", fontSize:'1.8rem', color: s.color, lineHeight:1 }}>{s.num}</div>
+            <div style={{ fontFamily:"'Cinzel',serif", fontSize:'1.8rem', color:s.color, lineHeight:1 }}>{s.num}</div>
             <div style={{ fontSize:'0.72rem', color:'var(--text-dim)', textTransform:'uppercase', letterSpacing:'0.08em', marginTop:'4px' }}>{s.label}</div>
           </div>
         ))}
       </div>
 
-      <SectionHeader title="Bokse" action="＋ Tilføj boks" onAction={() => setAddBoxOpen(true)} />
+      <SectionHeader title="Miniaturer" action="＋ Tilføj figur" onAction={() => setAddOpen(true)} />
 
-      {boxes.length === 0 && <EmptyState icon="📦" text="Ingen bokse endnu — tilføj din første boks." />}
+      {minis.length === 0 && <EmptyState icon="🎨" text="Ingen figurer endnu — tilføj din første." />}
 
-      <div style={{ background:'var(--bg2)', border: boxes.length ? '1px solid var(--border)' : 'none' }}>
-        {boxes.map(b => {
-          const bt = b.miniatures.length
-          const bd = b.miniatures.filter(m => m.status === 'done').length
-          const bpct = bt > 0 ? Math.round(bd / bt * 100) : 0
-          return (
-            <div key={b.id} style={{ borderBottom:'1px solid var(--border)', padding:'14px 20px', display:'flex', alignItems:'center', gap:'12px', cursor:'pointer', transition:'background 0.15s' }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--bg3)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-            >
-              <div style={{ flex:1 }} onClick={() => navigate(`/faction/${factionId}/box/${b.id}`)}>
-                <div style={{ fontWeight:600, color:'var(--text)', fontSize:'0.95rem' }}>{b.name}</div>
-                <div style={{ fontSize:'0.78rem', color:'var(--text-dim)', marginTop:'2px' }}>{bd}/{bt} malet{b.description ? ' · ' + b.description : ''}</div>
-              </div>
-              <ProgressBar pct={bpct} />
-              <button onClick={e => deleteBox(b.id, e)} style={{ background:'none', border:'none', color:'var(--text-dim)', cursor:'pointer', fontSize:'1rem', padding:'2px 6px', flexShrink:0, transition:'color 0.15s' }}
-                onMouseEnter={e => e.target.style.color = 'var(--red-bright)'}
-                onMouseLeave={e => e.target.style.color = 'var(--text-dim)'}
-              >🗑</button>
-            </div>
-          )
-        })}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(155px, 1fr))', gap:'14px' }}>
+        {minis.map(m => (
+          <MiniCard key={m.id} mini={m} onClick={() => openDetail(m)} />
+        ))}
+        <AddMiniTile onClick={() => setAddOpen(true)} />
       </div>
 
-      <Modal open={addBoxOpen} onClose={() => setAddBoxOpen(false)} title="Tilføj Boks">
-        <FormGroup label="Boksnavn">
-          <input value={boxForm.name} onChange={e => setBoxForm(f => ({ ...f, name: e.target.value }))} placeholder="f.eks. Berserkers Squad I" onKeyDown={e => e.key === 'Enter' && addBox()} />
-        </FormGroup>
-        <FormGroup label="Beskrivelse (valgfri)">
-          <input value={boxForm.description} onChange={e => setBoxForm(f => ({ ...f, description: e.target.value }))} placeholder="f.eks. 10 modeller" />
-        </FormGroup>
-        <BtnRow>
-          <Btn onClick={() => setAddBoxOpen(false)}>Annuller</Btn>
-          <Btn variant="primary" onClick={addBox} disabled={saving}>{saving ? '...' : 'Tilføj'}</Btn>
-        </BtnRow>
-      </Modal>
-
-      <Modal open={editFactionOpen} onClose={() => setEditFactionOpen(false)} title="Redigér Fraktion">
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Tilføj Miniature">
         <FormGroup label="Navn">
-          <input value={factionForm.name} onChange={e => setFactionForm(f => ({ ...f, name: e.target.value }))} />
+          <input value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
+            placeholder="f.eks. Khorne Berserker" onKeyDown={e => e.key === 'Enter' && addMini()} />
         </FormGroup>
-        <FormGroup label="Ikon (emoji)">
-          <input value={factionForm.icon} onChange={e => setFactionForm(f => ({ ...f, icon: e.target.value }))} maxLength={4} />
+        <FormGroup label="Type / Enhed">
+          <input value={addForm.unit_type} onChange={e => setAddForm(f => ({ ...f, unit_type: e.target.value }))}
+            placeholder="f.eks. Infantry, HQ, Vehicle..." />
         </FormGroup>
-        <FormGroup label="Farve">
-          <div style={{ display:'flex', gap:'8px' }}>
-            <input value={factionForm.color} onChange={e => setFactionForm(f => ({ ...f, color: e.target.value }))} />
-            <input type="color" value={factionForm.color} onChange={e => setFactionForm(f => ({ ...f, color: e.target.value }))}
-              style={{ width:'44px', height:'40px', padding:'2px', border:'1px solid var(--border)', background:'var(--bg3)', cursor:'pointer' }} />
+        <FormGroup label="Antal figurer">
+          <input type="number" min="1" max="100" value={addForm.count}
+            onChange={e => setAddForm(f => ({ ...f, count: e.target.value }))} placeholder="1" />
+        </FormGroup>
+        {parseInt(addForm.count) > 1 && addForm.name.trim() && (
+          <div style={{ background:'var(--bg3)', border:'1px solid var(--border)', padding:'12px 14px', marginBottom:'16px', fontSize:'0.82rem', color:'var(--text-dim)' }}>
+            Opretter <span style={{ color:'var(--gold2)' }}>{addForm.count} figurer</span>: {addForm.name.trim()} #1, {addForm.name.trim()} #2 ...
           </div>
+        )}
+        <FormGroup label="Status">
+          <StatusPicker value={addForm.status} onChange={v => setAddForm(f => ({ ...f, status: v }))} />
         </FormGroup>
         <BtnRow>
-          <Btn onClick={() => setEditFactionOpen(false)}>Annuller</Btn>
-          <Btn variant="primary" onClick={saveFaction} disabled={saving}>{saving ? '...' : 'Gem'}</Btn>
+          <Btn onClick={() => setAddOpen(false)}>Annuller</Btn>
+          <Btn variant="primary" onClick={addMini} disabled={addSaving}>
+            {addSaving ? '...' : `Tilføj ${parseInt(addForm.count) > 1 ? addForm.count + ' figurer' : 'figur'}`}
+          </Btn>
         </BtnRow>
       </Modal>
 
-      <Modal open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} title="Slet Fraktion">
-        <p style={{ color:'var(--text)', marginBottom:'8px' }}>Er du sikker? Dette sletter <strong style={{ color:'var(--red-bright)' }}>{faction.name}</strong> og alle dens bokse og figurer.</p>
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title={selectedMini?.name || 'Miniature'} large>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'24px' }}>
+          <div>
+            <div onClick={() => imgInputRef.current?.click()} style={{ aspectRatio:'1', background:'var(--bg3)', border:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', position:'relative', cursor:'pointer' }}>
+              {selectedMini?.image_url ? (
+                <img src={selectedMini.image_url} alt={selectedMini.name} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+              ) : (
+                <div style={{ textAlign:'center', color:'var(--text-dim)' }}>
+                  <span style={{ fontSize:'3rem', display:'block', marginBottom:'8px' }}>{imgUploading ? '⏳' : '🎨'}</span>
+                  <p style={{ fontSize:'0.8rem' }}>{imgUploading ? 'Uploader...' : 'Klik for billede'}</p>
+                </div>
+              )}
+              <div style={{ position:'absolute', bottom:'8px', left:0, right:0, textAlign:'center', fontSize:'0.72rem', color:'var(--text-dim)', background:'rgba(10,10,12,0.7)', padding:'4px' }}>
+                {imgUploading ? 'Uploader...' : 'Klik for at skifte billede'}
+              </div>
+            </div>
+            <input ref={imgInputRef} type="file" accept="image/*" onChange={handleImgUpload} style={{ display:'none' }} />
+            {selectedMini?.image_url && (
+              <button onClick={async () => {
+                if (!confirm('Fjern billede?')) return
+                const path = selectedMini.image_url.split('/miniature-images/')[1]
+                if (path) await supabase.storage.from('miniature-images').remove([path])
+                await supabase.from('miniatures').update({ image_url: null }).eq('id', selectedMini.id)
+                setSelectedMini(m => ({ ...m, image_url: null }))
+                fetchData()
+              }} style={{ width:'100%', marginTop:'8px', background:'none', border:'1px solid var(--border)', color:'var(--text-dim)', padding:'6px', fontSize:'0.78rem', cursor:'pointer', fontFamily:"'Crimson Text',serif" }}>
+                Fjern billede
+              </button>
+            )}
+          </div>
+          <div>
+            <FormGroup label="Navn">
+              <input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} />
+            </FormGroup>
+            <FormGroup label="Type / Enhed">
+              <input value={editForm.unit_type} onChange={e => setEditForm(f => ({ ...f, unit_type: e.target.value }))} />
+            </FormGroup>
+            <FormGroup label="Status">
+              <StatusPicker value={editForm.status} onChange={v => setEditForm(f => ({ ...f, status: v }))} />
+            </FormGroup>
+            <FormGroup label="Noter">
+              <textarea value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} placeholder="Farver brugt, fremgang, idéer..." />
+            </FormGroup>
+          </div>
+        </div>
         <BtnRow>
-          <Btn onClick={() => setDeleteConfirmOpen(false)}>Annuller</Btn>
-          <Btn variant="danger" onClick={deleteFaction}>Ja, slet alt</Btn>
+          <Btn variant="danger" onClick={deleteMini}>🗑 Slet figur</Btn>
+          <Btn onClick={() => setDetailOpen(false)}>Annuller</Btn>
+          <Btn variant="primary" onClick={saveMini} disabled={editSaving}>{editSaving ? '...' : 'Gem'}</Btn>
         </BtnRow>
       </Modal>
+
+      <Modal open={deleteBoxOpen} onClose={() => setDeleteBoxOpen(false)} title="Slet Boks">
+        <p style={{ color:'var(--text)', marginBottom:'8px' }}>Er du sikker? Dette sletter <strong style={{ color:'var(--red-bright)' }}>{box.name}</strong> og alle dens figurer permanent.</p>
+        <BtnRow>
+          <Btn onClick={() => setDeleteBoxOpen(false)}>Annuller</Btn>
+          <Btn variant="danger" onClick={deleteBox}>Ja, slet boks</Btn>
+        </BtnRow>
+      </Modal>
+    </div>
+  )
+}
+
+function MiniCard({ mini, onClick }) {
+  return (
+    <div onClick={onClick} style={{ background:'var(--bg2)', border:'1px solid var(--border)', overflow:'hidden', cursor:'pointer', transition:'border-color 0.2s, transform 0.2s' }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor='var(--border-bright)'; e.currentTarget.style.transform='translateY(-2px)' }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.transform='none' }}
+    >
+      <div style={{ width:'100%', aspectRatio:'1', background:'var(--bg3)', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', fontSize:'2.5rem' }}>
+        {mini.image_url ? <img src={mini.image_url} alt={mini.name} style={{ width:'100%', height:'100%', objectFit:'cover' }} /> : '🎨'}
+      </div>
+      <div style={{ padding:'10px 10px 8px' }}>
+        <div style={{ fontSize:'0.85rem', color:'var(--text)', fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{mini.name}</div>
+        {mini.unit_type && <div style={{ fontSize:'0.72rem', color:'var(--text-dim)', marginBottom:'4px' }}>{mini.unit_type}</div>}
+        <StatusBadge status={mini.status} />
+      </div>
+    </div>
+  )
+}
+
+function AddMiniTile({ onClick }) {
+  return (
+    <div onClick={onClick} style={{ background:'var(--bg2)', border:'1px dashed var(--border)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'8px', aspectRatio:'1', cursor:'pointer', color:'var(--text-dim)', transition:'all 0.2s', fontFamily:"'Crimson Text',serif", fontSize:'0.82rem' }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor='var(--gold-dim)'; e.currentTarget.style.color='var(--gold2)'; e.currentTarget.style.background='rgba(200,150,42,0.04)' }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.color='var(--text-dim)'; e.currentTarget.style.background='var(--bg2)' }}
+    >
+      <span style={{ fontSize:'2rem', lineHeight:1 }}>+</span>
+      <span>Tilføj figur</span>
     </div>
   )
 }
