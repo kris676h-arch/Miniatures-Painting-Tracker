@@ -13,7 +13,7 @@ export default function BoxPage() {
 
   // Add mini
   const [addOpen, setAddOpen] = useState(false)
-  const [addForm, setAddForm] = useState({ name: '', unit_type: '', status: 'unpainted' })
+  const [addForm, setAddForm] = useState({ name: '', unit_type: '', status: 'unpainted', count: 1 })
   const [addSaving, setAddSaving] = useState(false)
 
   // Mini detail / edit
@@ -46,15 +46,17 @@ export default function BoxPage() {
   async function addMini() {
     if (!addForm.name.trim()) return
     setAddSaving(true)
-    await supabase.from('miniatures').insert({
+    const count = Math.max(1, Math.min(100, parseInt(addForm.count) || 1))
+    const rows = Array.from({ length: count }, (_, i) => ({
       box_id: boxId,
-      name: addForm.name.trim(),
+      name: count === 1 ? addForm.name.trim() : `${addForm.name.trim()} #${i + 1}`,
       unit_type: addForm.unit_type.trim(),
       status: addForm.status,
-    })
+    }))
+    await supabase.from('miniatures').insert(rows)
     setAddSaving(false)
     setAddOpen(false)
-    setAddForm({ name: '', unit_type: '', status: 'unpainted' })
+    setAddForm({ name: '', unit_type: '', status: 'unpainted', count: 1 })
     fetchData()
   }
 
@@ -188,18 +190,33 @@ export default function BoxPage() {
       <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Tilføj Miniature">
         <FormGroup label="Navn">
           <input value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
-            placeholder="f.eks. Khorne Berserker #1" onKeyDown={e => e.key === 'Enter' && addMini()} />
+            placeholder="f.eks. Khorne Berserker" onKeyDown={e => e.key === 'Enter' && addMini()} />
         </FormGroup>
         <FormGroup label="Type / Enhed">
           <input value={addForm.unit_type} onChange={e => setAddForm(f => ({ ...f, unit_type: e.target.value }))}
             placeholder="f.eks. Infantry, HQ, Vehicle..." />
         </FormGroup>
+        <FormGroup label="Antal figurer">
+          <input
+            type="number" min="1" max="100"
+            value={addForm.count}
+            onChange={e => setAddForm(f => ({ ...f, count: e.target.value }))}
+            placeholder="1"
+          />
+        </FormGroup>
+        {parseInt(addForm.count) > 1 && addForm.name.trim() && (
+          <div style={{ background:'var(--bg3)', border:'1px solid var(--border)', padding:'12px 14px', marginBottom:'16px', fontSize:'0.82rem', color:'var(--text-dim)' }}>
+            Opretter <span style={{ color:'var(--gold2)' }}>{addForm.count} figurer</span>: {addForm.name.trim()} #1, {addForm.name.trim()} #2 ...
+          </div>
+        )}
         <FormGroup label="Status">
           <StatusPicker value={addForm.status} onChange={v => setAddForm(f => ({ ...f, status: v }))} />
         </FormGroup>
         <BtnRow>
           <Btn onClick={() => setAddOpen(false)}>Annuller</Btn>
-          <Btn variant="primary" onClick={addMini} disabled={addSaving}>{addSaving ? '...' : 'Tilføj'}</Btn>
+          <Btn variant="primary" onClick={addMini} disabled={addSaving}>
+            {addSaving ? '...' : `Tilføj ${parseInt(addForm.count) > 1 ? addForm.count + ' figurer' : 'figur'}`}
+          </Btn>
         </BtnRow>
       </Modal>
 
